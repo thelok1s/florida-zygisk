@@ -1,0 +1,6 @@
+id=florida-zygisk
+name=Florida Zygisk Module
+version=1.0
+versionCode=1
+author=lok1s
+description=Frida + Florida zygisk module

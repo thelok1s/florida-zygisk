@@ -1,0 +1,5 @@
+# Required Magisk updater-script stub
+ui_print("Installing module...");
+# Add actual installation commands in build step
+
+# End of script

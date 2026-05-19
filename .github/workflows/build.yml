@@ -1,0 +1,409 @@
+name: flordia-zygisk Build
+
+on:
+  schedule:
+    - cron: "0 12 * * MON"
+  workflow_dispatch:
+    inputs:
+      force_rebuild:
+        description: "Force rebuild even if release already exists"
+        required: false
+        default: "false"
+      frida_version:
+        description: "Override frida version (e.g. 17.9.6). Leave empty to use latest."
+        required: false
+        default: ""
+  push:
+    branches: ["main", "ci"]
+    paths:
+      - ".github/workflows/build.yml"
+
+# Only allow one build at a time; cancel in-progress if a new one is triggered
+concurrency:
+  group: build
+  cancel-in-progress: true
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────────────────
+  # JOB 1: Determine what needs to be built
+  # ─────────────────────────────────────────────────────────────────────────────
+  check_version:
+    name: Check versions
+    runs-on: ubuntu-22.04
+
+    outputs:
+      FRIDA_VERSION: ${{ steps.frida.outputs.version }}
+      MAGISK_FRIDA_TAG: ${{ steps.magisk_frida.outputs.tag }}
+      FLORIDA_PATCHES_SHA: ${{ steps.florida_sha.outputs.sha }}
+      RELEASE_TAG: ${{ steps.compute_tag.outputs.tag }}
+      SHOULD_BUILD: ${{ steps.should_build.outputs.result }}
+
+    steps:
+      - name: Get latest frida release
+        id: frida
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const override = '${{ github.event.inputs.frida_version }}';
+            if (override && override.trim() !== '') {
+              core.setOutput('version', override.trim());
+              core.info(`Using overridden frida version: ${override.trim()}`);
+              return;
+            }
+            const { data } = await github.rest.repos.getLatestRelease({
+              owner: 'frida',
+              repo: 'frida',
+            });
+            core.setOutput('version', data.tag_name);
+            core.info(`Latest frida version: ${data.tag_name}`);
+
+      - name: Get latest magisk-frida release
+        id: magisk_frida
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data } = await github.rest.repos.getLatestRelease({
+              owner: 'ViRb3',
+              repo: 'magisk-frida',
+            });
+            core.setOutput('tag', data.tag_name);
+            core.info(`Latest magisk-frida tag: ${data.tag_name}`);
+
+      - name: Get Florida patches HEAD SHA
+        id: florida_sha
+        run: |
+          SHA=$(git ls-remote https://github.com/Ylarod/Florida.git HEAD | cut -f1 | cut -c1-8)
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "Florida patches SHA: $SHA"
+
+      - name: Compute our release tag
+        id: compute_tag
+        run: |
+          # Format: FRIDA_VERSION (we track frida version directly)
+          TAG="${{ steps.frida.outputs.version }}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Computed release tag: $TAG"
+
+      - name: Check if release already exists
+        id: should_build
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const tag = '${{ steps.compute_tag.outputs.tag }}';
+            const forceRebuild = '${{ github.event.inputs.force_rebuild }}' === 'true';
+            const isPush = '${{ github.event_name }}' === 'push';
+
+            if (forceRebuild || isPush) {
+              core.info('Force rebuild requested or push event – will build.');
+              core.setOutput('result', 'true');
+              return;
+            }
+
+            try {
+              await github.rest.repos.getReleaseByTag({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                tag,
+              });
+              core.info(`Release ${tag} already exists – skipping.`);
+              core.setOutput('result', 'false');
+            } catch (e) {
+              if (e.status === 404) {
+                core.info(`Release ${tag} not found – will build.`);
+                core.setOutput('result', 'true');
+              } else {
+                throw e;
+              }
+            }
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # JOB 2: Build Florida frida-server for each Android architecture
+  #         (matrix so all 4 arches run in parallel – each ~30–60 min)
+  # ─────────────────────────────────────────────────────────────────────────────
+  build_florida:
+    name: Build Florida (${{ matrix.arch }})
+    needs: check_version
+    if: needs.check_version.outputs.SHOULD_BUILD == 'true'
+    runs-on: ubuntu-22.04
+
+    strategy:
+      fail-fast: false # let other arches continue if one fails
+      matrix:
+        arch: [android-arm, android-arm64, android-x86, android-x86_64]
+
+    steps:
+      - name: Checkout our repo (for any local patches)
+        uses: actions/checkout@v4
+
+      - name: Install system build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            build-essential ninja-build \
+            gcc-multilib g++-multilib \
+            lib32stdc++6 \
+            flex bison \
+            ruby ruby-dev \
+            python3-requests python3-setuptools python3-dev python3-pip \
+            libc6-dev libc6-dev-i386 \
+            tree curl git
+          sudo gem install fpm -v 1.11.0 --no-document 2>/dev/null || true
+          python3 -m pip install lief 2>/dev/null || true
+
+      - name: Setup Android NDK
+        id: setup-ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          # r27c is the latest stable NDK; Florida's original used r29 (not yet stable)
+          ndk-version: r27c
+          local-cache: true
+          link-to-sdk: true
+
+      - name: Setup Node.js 18
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Setup Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Cache frida clone
+        uses: actions/cache@v4
+        id: cache-frida
+        with:
+          # Cache the full frida source tree (submodules included) by frida version.
+          # This avoids a ~1 GB git clone + submodule init on every arch run.
+          path: frida
+          key: frida-src-${{ needs.check_version.outputs.FRIDA_VERSION }}
+
+      - name: Clone frida at target version
+        if: steps.cache-frida.outputs.cache-hit != 'true'
+        env:
+          FRIDA_VERSION: ${{ needs.check_version.outputs.FRIDA_VERSION }}
+        run: |
+          echo "Cloning frida $FRIDA_VERSION …"
+          git clone \
+            --depth 1 \
+            --branch "$FRIDA_VERSION" \
+            --recurse-submodules \
+            --shallow-submodules \
+            https://github.com/frida/frida
+
+      - name: Clone Florida (patches only)
+        env:
+          FLORIDA_SHA: ${{ needs.check_version.outputs.FLORIDA_PATCHES_SHA }}
+        run: |
+          echo "Cloning Florida patches …"
+          git clone --depth 1 https://github.com/Ylarod/Florida florida-repo
+
+      - name: Apply Florida patches to frida subprojects
+        run: |
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          PATCH_BASE="$(pwd)/florida-repo/patches"
+
+          if [ ! -d "$PATCH_BASE" ]; then
+            echo "ERROR: patches directory not found in Florida repo!"
+            ls florida-repo/
+            exit 1
+          fi
+
+          echo "Available patch directories:"
+          ls "$PATCH_BASE"
+
+          cd frida
+          for patch_dir in "$PATCH_BASE"/*/; do
+            subproject=$(basename "$patch_dir")
+            target="subprojects/$subproject"
+
+            if [ ! -d "$target" ]; then
+              echo "SKIP: subproject '$subproject' not found in frida tree"
+              continue
+            fi
+
+            patch_count=$(find "$patch_dir" -name "*.patch" | wc -l)
+            if [ "$patch_count" -eq 0 ]; then
+              echo "SKIP: no .patch files in $patch_dir"
+              continue
+            fi
+
+            echo "Applying $patch_count patch(es) to frida/$target …"
+            cd "$target"
+            # Use git am so each patch becomes a proper commit; --ignore-whitespace
+            # and --reject help handle minor context differences across frida versions.
+            git am \
+              --ignore-whitespace \
+              "$patch_dir"*.patch \
+            || {
+              echo "git am failed for $subproject – attempting with --reject"
+              git am --abort 2>/dev/null || true
+              git am --ignore-whitespace --reject \
+                "$patch_dir"*.patch \
+              || {
+                echo "WARNING: some patches rejected for $subproject (see .rej files)"
+                # Continue anyway; partial patches are better than none
+                git am --skip 2>/dev/null || true
+              }
+            }
+            cd "$(git -C "$(pwd)" rev-parse --show-toplevel)/../.."
+          done
+          echo "All patches applied."
+
+      - name: Build frida-server for ${{ matrix.arch }}
+        env:
+          ANDROID_NDK_ROOT: ${{ steps.setup-ndk.outputs.ndk-path }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          echo "Building frida for $ARCH …"
+          echo "NDK: $ANDROID_NDK_ROOT"
+
+          mkdir -p "build-$ARCH"
+          cd "build-$ARCH"
+
+          # Configure (frida uses its own configure wrapper around meson)
+          ../frida/configure --host="$ARCH"
+
+          # Build only frida-server to save time/disk
+          make subprojects/frida-core/server/frida-server
+
+      - name: Compress frida-server binary
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          SERVER_PATH="build-$ARCH/subprojects/frida-core/server/frida-server"
+          if [ ! -f "$SERVER_PATH" ]; then
+            echo "ERROR: frida-server not found at $SERVER_PATH"
+            find "build-$ARCH" -name "frida-server" 2>/dev/null || true
+            exit 1
+          fi
+
+          # Compress with gzip (matching Florida's release format)
+          cp "$SERVER_PATH" "frida-server-$ARCH"
+          gzip -9 "frida-server-$ARCH"
+          echo "Compressed: frida-server-$ARCH.gz ($(du -sh "frida-server-$ARCH.gz" | cut -f1))"
+
+      - name: Upload arch artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: florida-server-${{ matrix.arch }}
+          path: frida-server-${{ matrix.arch }}.gz
+          retention-days: 1
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # JOB 3: Package all 4 arches into a Magisk module ZIP and publish a release
+  # ─────────────────────────────────────────────────────────────────────────────
+  package_and_release:
+    name: Package Magisk module & release
+    needs: [check_version, build_florida]
+    if: needs.check_version.outputs.SHOULD_BUILD == 'true'
+    runs-on: ubuntu-22.04
+
+    permissions:
+      contents: write # needed to create releases
+
+    steps:
+      - name: Checkout our repo
+        uses: actions/checkout@v4
+
+      - name: Download all arch artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: florida-server-*
+          path: downloads/
+          merge-multiple: true
+
+      - name: Verify downloaded artifacts
+        run: |
+          echo "Downloaded artifacts:"
+          ls -lh downloads/
+          for arch in android-arm android-arm64 android-x86 android-x86_64; do
+            f="downloads/frida-server-$arch.gz"
+            if [ ! -f "$f" ]; then
+              echo "ERROR: missing $f"
+              exit 1
+            fi
+          done
+          echo "All 4 arch binaries present."
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install Python dependencies
+        run: pip install requests
+
+      - name: Build Magisk module ZIP
+        env:
+          FRIDA_VERSION: ${{ needs.check_version.outputs.FRIDA_VERSION }}
+          MAGISK_FRIDA_TAG: ${{ needs.check_version.outputs.MAGISK_FRIDA_TAG }}
+          FLORIDA_SHA: ${{ needs.check_version.outputs.FLORIDA_PATCHES_SHA }}
+          RELEASE_TAG: ${{ needs.check_version.outputs.RELEASE_TAG }}
+          GITHUB_REPO: ${{ github.repository }}
+        run: python3 build.py
+
+      - name: List build output
+        run: |
+          echo "Build directory contents:"
+          ls -lh build/
+
+      - name: Delete existing release if force-rebuilding
+        if: github.event.inputs.force_rebuild == 'true'
+        uses: actions/github-script@v7
+        continue-on-error: true # fails gracefully if release doesn't exist
+        with:
+          script: |
+            const tag = '${{ needs.check_version.outputs.RELEASE_TAG }}';
+            try {
+              const rel = await github.rest.repos.getReleaseByTag({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                tag,
+              });
+              await github.rest.repos.deleteRelease({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                release_id: rel.data.id,
+              });
+              await github.rest.git.deleteRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: `tags/${tag}`,
+              });
+              core.info(`Deleted existing release and tag: ${tag}`);
+            } catch (e) {
+              core.info(`No existing release to delete: ${e.message}`);
+            }
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.check_version.outputs.RELEASE_TAG }}
+          name: "flordia-zygisk (Florida) ${{ needs.check_version.outputs.RELEASE_TAG }}"
+          body: |
+            ## flordia-zygisk – Florida frida-server on Boot
+
+            Magisk module wrapping **[Florida](https://github.com/Ylarod/Florida)** (anti-detection frida-server)
+            packaged in the **[magisk-frida](https://github.com/ViRb3/magisk-frida)** module format.
+
+            | Component | Version |
+            |-----------|---------|
+            | frida / Florida | `${{ needs.check_version.outputs.FRIDA_VERSION }}` |
+            | magisk-frida template | `${{ needs.check_version.outputs.MAGISK_FRIDA_TAG }}` |
+            | Florida patches SHA | `${{ needs.check_version.outputs.FLORIDA_PATCHES_SHA }}` |
+
+            ### Installation
+            Flash `flordia-zygisk-*.zip` via Magisk / KSU / APatch.
+            Architectures included: `arm`, `arm64`, `x86`, `x86_64`.
+
+            ### How it works
+            Florida's patches are applied to the frida source tree and compiled from scratch
+            (we do not depend on Florida's CI, which has been unreliable).
+          files: |
+            build/flordia-zygisk-*.zip
+            build/updater.json
+          fail_on_unmatched_files: true
+          make_latest: true

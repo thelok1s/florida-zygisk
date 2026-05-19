@@ -1,0 +1,44 @@
+#!/sbin/sh
+
+SKIPUNZIP=1
+
+# ── Helpers provided by the Magisk installer environment ─────────────────────
+# ui_print, set_perm_recursive, abort — all defined by Magisk's boot script
+
+# ── Android API level check ───────────────────────────────────────────────────
+API=$(getprop ro.build.version.sdk)
+if [ "$API" -lt 21 ]; then
+    abort "! Minimum Android API required: 21 (got $API)"
+fi
+
+# ── Detect architecture ───────────────────────────────────────────────────────
+ABI=$(getprop ro.product.cpu.abi)
+case "$ABI" in
+    arm64-v8a) ARCH=arm64  ;;
+    x86_64)    ARCH=x86_64 ;;
+    x86*)      ARCH=x86    ;;
+    *)         ARCH=arm    ;;
+esac
+
+ui_print "- Device architecture: $ARCH"
+
+# ── Extract module files ──────────────────────────────────────────────────────
+ui_print "- Extracting module files"
+
+# Extract the architecture-specific frida-server binary
+unzip -o "$ZIPFILE" "files/frida-server-$ARCH" -d "$MODPATH" >&2 \
+    || abort "! Failed to extract frida-server-$ARCH"
+
+# Extract module metadata and scripts
+for f in module.prop service.sh; do
+    unzip -o "$ZIPFILE" "$f" -d "$MODPATH" >&2 \
+        || abort "! Failed to extract $f"
+done
+
+# ── Permissions ───────────────────────────────────────────────────────────────
+ui_print "- Setting permissions"
+set_perm_recursive "$MODPATH/files" root root 0755 0755
+set_perm "$MODPATH/service.sh" root root 0755
+
+ui_print "- flordia-zygisk installed successfully!"
+ui_print "  Reboot to start the Florida frida-server."
