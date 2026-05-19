@@ -1,8 +1,8 @@
 # flordia-zygisk — Florida frida-server on Boot
 
-[![Build Status](https://img.shields.io/github/actions/workflow/status/YOUR_GITHUB_USERNAME/flordia-zygisk/build.yml?branch=main&label=Build)](../../actions/workflows/build.yml)
-[![Latest Release](https://img.shields.io/github/v/release/YOUR_GITHUB_USERNAME/flordia-zygisk)](../../releases/latest)
-[![Downloads](https://img.shields.io/github/downloads/YOUR_GITHUB_USERNAME/flordia-zygisk/total)](../../releases)
+[![Build Status](https://img.shields.io/github/actions/workflow/status/thelok1s/flordia-zygisk/build.yml?branch=main&label=Build)](../../actions/workflows/build.yml)
+[![Latest Release](https://img.shields.io/github/v/release/thelok1s/flordia-zygisk)](../../releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/thelok1s/flordia-zygisk/total)](../../releases)
 
 A Magisk module that automatically starts **[Florida](https://github.com/Ylarod/Florida)** — an
 anti-detection build of frida-server — on boot.
