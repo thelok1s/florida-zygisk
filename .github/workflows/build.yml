@@ -1,4 +1,4 @@
-name: flordia-zygisk Build
+name: florida-zygisk Build
 
 on:
   schedule:
@@ -92,9 +92,10 @@ jobs:
             const tag = '${{ steps.compute_tag.outputs.tag }}';
             const forceRebuild = '${{ github.event.inputs.force_rebuild }}' === 'true';
             const isPush = '${{ github.event_name }}' === 'push';
+            const isManual = '${{ github.event_name }}' === 'workflow_dispatch';
 
-            if (forceRebuild || isPush) {
-              core.info('Force rebuild requested or push event – will build.');
+            if (forceRebuild || isPush || isManual) {
+              core.info('Force rebuild, push, or manual run – will build.');
               core.setOutput('result', 'true');
               return;
             }
@@ -382,9 +383,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.check_version.outputs.RELEASE_TAG }}
-          name: "flordia-zygisk (Florida) ${{ needs.check_version.outputs.RELEASE_TAG }}"
+          name: "florida-zygisk (Florida) ${{ needs.check_version.outputs.RELEASE_TAG }}"
           body: |
-            ## flordia-zygisk – Florida frida-server on Boot
+            ## florida-zygisk – Florida frida-server on Boot
 
             Magisk module wrapping **[Florida](https://github.com/Ylarod/Florida)** (anti-detection frida-server)
             packaged in the **[magisk-frida](https://github.com/ViRb3/magisk-frida)** module format.
@@ -396,14 +397,15 @@ jobs:
             | Florida patches SHA | `${{ needs.check_version.outputs.FLORIDA_PATCHES_SHA }}` |
 
             ### Installation
-            Flash `flordia-zygisk-*.zip` via Magisk / KSU / APatch.
+            Flash `florida-zygisk-*.zip` via Magisk / KSU / APatch.
             Architectures included: `arm`, `arm64`, `x86`, `x86_64`.
 
             ### How it works
             Florida's patches are applied to the frida source tree and compiled from scratch
             (we do not depend on Florida's CI, which has been unreliable).
           files: |
-            build/flordia-zygisk-*.zip
+            build/florida-zygisk-*.zip
             build/updater.json
+            downloads/frida-server-*.gz
           fail_on_unmatched_files: true
           make_latest: true

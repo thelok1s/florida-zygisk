@@ -1,8 +1,8 @@
-# flordia-zygisk — Florida frida-server on Boot
+# florida-zygisk — Florida frida-server on Boot
 
-[![Build Status](https://img.shields.io/github/actions/workflow/status/YOUR_GITHUB_USERNAME/flordia-zygisk/build.yml?branch=main&label=Build)](../../actions/workflows/build.yml)
-[![Latest Release](https://img.shields.io/github/v/release/YOUR_GITHUB_USERNAME/flordia-zygisk)](../../releases/latest)
-[![Downloads](https://img.shields.io/github/downloads/YOUR_GITHUB_USERNAME/flordia-zygisk/total)](../../releases)
+[![Build Status](https://img.shields.io/github/actions/workflow/status/thelok1s/florida-zygisk/build.yml?branch=main&label=Build)](actions/workflows/build.yml)
+[![Latest Release](https://img.shields.io/github/v/release/thelok1s/florida-zygisk)](releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/thelok1s/florida-zygisk/total)](releases)
 
 A Magisk module that automatically starts **[Florida](https://github.com/Ylarod/Florida)** — an
 anti-detection build of frida-server — on boot.
@@ -44,7 +44,7 @@ Magisk ≥ 24 · KernelSU · APatch
 
 ## Installation
 
-1. Download the latest `flordia-zygisk-*.zip` from the [Releases](../../releases) page.
+1. Download the latest `florida-zygisk-*.zip` from the [Releases](releases) page.
 2. Flash via Magisk Manager / KSU / APatch.
 3. Reboot. The Florida frida-server starts automatically at late-boot.
 
@@ -60,7 +60,7 @@ frida -U <target_package>
 ### Logs
 
 ```bash
-adb shell cat /data/local/tmp/flordia-zygisk.log
+adb shell cat /data/local/tmp/florida-zygisk.log
 ```
 
 ## Building locally
@@ -91,7 +91,7 @@ done
 
 # 2. Package into the Magisk module ZIP
 FRIDA_VERSION=<tag> RELEASE_TAG=<tag> GITHUB_REPO=you/flordia-zygisk python3 build.py
-# Result: build/flordia-zygisk-<tag>.zip
+# Result: build/florida-zygisk-<tag>.zip
 ```
 
 ## Credits
