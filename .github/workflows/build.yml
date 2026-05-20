@@ -155,8 +155,8 @@ jobs:
         id: setup-ndk
         uses: nttld/setup-ndk@v1
         with:
-          # r27c is the latest stable NDK; Florida's original used r29 (not yet stable)
-          ndk-version: r27c
+          # Frida requires NDK r29
+          ndk-version: r29
           local-cache: true
           link-to-sdk: true
 

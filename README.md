@@ -66,7 +66,7 @@ adb shell cat /data/local/tmp/florida-zygisk.log
 ## Building locally
 
 ```bash
-# 1. Build Florida frida-server binaries (requires Android NDK r27c+)
+# 1. Build Florida frida-server binaries (requires Android NDK r29+)
 export ANDROID_NDK_ROOT=/path/to/ndk
 
 git clone --recurse-submodules --branch <frida-tag> https://github.com/frida/frida
