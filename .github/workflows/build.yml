@@ -88,6 +88,7 @@ jobs:
         id: should_build
         uses: actions/github-script@v7
         with:
+          result-encoding: string
           script: |
             const tag = '${{ steps.compute_tag.outputs.tag }}';
             const forceRebuild = '${{ github.event.inputs.force_rebuild }}' === 'true';
@@ -96,8 +97,7 @@ jobs:
 
             if (forceRebuild || isPush || isManual) {
               core.info('Force rebuild, push, or manual run – will build.');
-              core.setOutput('result', 'true');
-              return;
+              return 'true';
             }
 
             try {
@@ -107,11 +107,11 @@ jobs:
                 tag,
               });
               core.info(`Release ${tag} already exists – skipping.`);
-              core.setOutput('result', 'false');
+              return 'false';
             } catch (e) {
               if (e.status === 404) {
                 core.info(`Release ${tag} not found – will build.`);
-                core.setOutput('result', 'true');
+                return 'true';
               } else {
                 throw e;
               }
