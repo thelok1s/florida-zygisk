@@ -47,13 +47,13 @@ def write_module_prop(
     mod_dir: Path, frida_version: str, release_tag: str, github_repo: str
 ) -> None:
     content = (
-        f"id=magisk-hluda\n"
+        f"id=florida-zygisk\n"
         f"name=florida-zygisk (Florida)\n"
         f"version={release_tag}\n"
         f"versionCode={generate_version_code(release_tag)}\n"
-        f"author=Exo1i (module) / Ylarod (Florida) / ViRb3 (template)\n"
+        f"author=lok1s | Credits: Ylarod (Florida), ViRb3 (magisk-frida)\n"
         f"updateJson=https://github.com/{github_repo}/releases/latest/download/updater.json\n"
-        f"description=Anti-detection Florida frida-server {frida_version} on boot (Magisk/KSU/APatch)\n"
+        f"description=Florida frida-server {frida_version} on boot - tap Action to toggle\n"
     )
     (mod_dir / "module.prop").write_text(content, encoding="utf-8", newline="\n")
     log.info("Wrote module.prop")

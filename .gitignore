@@ -14,3 +14,4 @@ build/
 # Temporary
 *.tmp
 .antigravitycli
+.DS_Store

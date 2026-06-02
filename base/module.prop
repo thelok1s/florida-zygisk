@@ -1,6 +1,6 @@
 id=florida-zygisk
-name=Florida Zygisk Module
-version=1.0
-versionCode=1
-author=lok1s
-description=Frida + Florida zygisk module
+name=florida zygisk module
+version=1.1
+versionCode=2
+author=lok1s | Credits: Ylarod (florida), ViRb3 (magisk-frida)
+description=Runs patched frida-server (florida) on boot
