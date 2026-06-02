@@ -18,7 +18,6 @@ on:
     paths:
       - ".github/workflows/build.yml"
 
-# Only allow one build at a time; cancel in-progress if a new one is triggered
 concurrency:
   group: build
   cancel-in-progress: true
@@ -119,7 +118,6 @@ jobs:
 
   # ─────────────────────────────────────────────────────────────────────────────
   # JOB 2: Build Florida frida-server for each Android architecture
-  #         (matrix so all 4 arches run in parallel – each ~30–60 min)
   # ─────────────────────────────────────────────────────────────────────────────
   build_florida:
     name: Build Florida (${{ matrix.arch }})
@@ -174,10 +172,10 @@ jobs:
         uses: actions/cache@v4
         id: cache-frida
         with:
-          # Cache the full frida source tree (submodules included) by frida version.
-          # This avoids a ~1 GB git clone + submodule init on every arch run.
+          # Cache the full frida source tree (submodules included) by frida version +
+          # Florida patches SHA so a patches change always triggers a fresh clone.
           path: frida
-          key: frida-src-${{ needs.check_version.outputs.FRIDA_VERSION }}
+          key: frida-src-${{ needs.check_version.outputs.FRIDA_VERSION }}-${{ needs.check_version.outputs.FLORIDA_PATCHES_SHA }}
 
       - name: Clone frida at target version
         if: steps.cache-frida.outputs.cache-hit != 'true'
@@ -216,6 +214,7 @@ jobs:
           ls "$PATCH_BASE"
 
           cd frida
+          FRIDA_ROOT="$(pwd)"
           for patch_dir in "$PATCH_BASE"/*/; do
             subproject=$(basename "$patch_dir")
             target="subprojects/$subproject"
@@ -232,7 +231,7 @@ jobs:
             fi
 
             echo "Applying $patch_count patch(es) to frida/$target …"
-            cd "$target"
+            cd "$FRIDA_ROOT/$target"
             # Use git am so each patch becomes a proper commit; --ignore-whitespace
             # and --reject help handle minor context differences across frida versions.
             git am \
@@ -249,7 +248,7 @@ jobs:
                 git am --skip 2>/dev/null || true
               }
             }
-            cd "$(git -C "$(pwd)" rev-parse --show-toplevel)/../.."
+            cd "$FRIDA_ROOT"
           done
           echo "All patches applied."
 
