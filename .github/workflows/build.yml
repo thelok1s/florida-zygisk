@@ -153,10 +153,25 @@ jobs:
         id: setup-ndk
         uses: nttld/setup-ndk@v1
         with:
-          # Frida requires NDK r29
           ndk-version: r29
-          local-cache: true
+          local-cache: false  # avoid stale/partial cache extractions
           link-to-sdk: true
+
+      - name: Ensure NDK clang symlinks exist
+        run: |
+          # NDK r29 stable ships versioned binaries (clang-21, clang++-21) but
+          # drops the plain 'clang' symlink that frida's meson cross-file expects.
+          BIN="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          for TOOL in clang clang++ lld llvm-ar llvm-strip; do
+            if [ ! -e "$BIN/$TOOL" ]; then
+              VERSIONED=$(ls "$BIN/$TOOL-"* 2>/dev/null | sort -V | tail -1)
+              if [ -n "$VERSIONED" ]; then
+                ln -sf "$(basename "$VERSIONED")" "$BIN/$TOOL"
+                echo "Linked $TOOL -> $(basename "$VERSIONED")"
+              fi
+            fi
+          done
+          echo "NDK clang: $("$BIN/clang" --version 2>/dev/null | head -1 || echo 'NOT FOUND – build will fail')"
 
       - name: Setup Node.js 18
         uses: actions/setup-node@v4
