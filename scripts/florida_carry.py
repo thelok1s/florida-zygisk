@@ -192,10 +192,61 @@ def anti_anti_frida(root: Path) -> None:
         print("florida_carry: embed-agent.py — already robust")
 
 
+def ensure_anti_anti_frida(root: Path) -> None:
+    """Carry the combined effect of Florida patches 0003 + 0004 + 0005 + 0007.
+
+    Those four patches all build up `src/anti-anti-frida.py` (0003 creates it,
+    0004/0005/0007 extend it) and 0003 switches the agent entrypoint symbol from
+    `frida_agent_main` to `main`. Patch 0003 is atomic, so when ONE of its other
+    hunks (host-session.vala) bit-rots, the WHOLE patch is rejected and the script
+    is never created — yet patch 0010 (the embed hook) still applies and tries to
+    run it. We repair that by (a) dropping in our copy of the final script and
+    (b) applying the entrypoint string swap idempotently.
+    """
+    src_dir = root / "subprojects" / "frida-core" / "src"
+    local_script = Path(__file__).resolve().parent / "anti-anti-frida.py"
+
+    # (a) Ensure the rename script exists (final cumulative Florida version).
+    target_script = src_dir / "anti-anti-frida.py"
+    if not target_script.exists():
+        if not local_script.exists():
+            sys.exit(f"florida_carry: cannot find local {local_script} to copy")
+        target_script.write_text(local_script.read_text())
+        print("florida_carry: created src/anti-anti-frida.py (patches 0003+0004+0005+0007)")
+    else:
+        print("florida_carry: src/anti-anti-frida.py already present")
+
+    # (b) Switch the agent entrypoint symbol frida_agent_main -> main in the host
+    # sessions + agent container, so the server looks up the renamed symbol.
+    # Idempotent: matches Florida patch 0003 exactly (every quoted literal).
+    targets = [
+        "agent-container.vala",
+        "linux/linux-host-session.vala",
+        "darwin/darwin-host-session.vala",
+        "freebsd/freebsd-host-session.vala",
+        "qnx/qnx-host-session.vala",
+        "windows/windows-host-session.vala",
+    ]
+    patched = 0
+    for rel in targets:
+        p = src_dir / rel
+        if not p.exists():
+            continue
+        s = p.read_text()
+        ns = s.replace('"frida_agent_main"', '"main"')
+        if ns != s:
+            p.write_text(ns)
+            patched += 1
+            print(f"florida_carry: entrypoint frida_agent_main -> main in {rel}")
+    if patched == 0:
+        print("florida_carry: entrypoint already 'main' everywhere (or files absent)")
+
+
 def main() -> None:
     root = _frida_root()
     rpc_obfuscation(root)
-    anti_anti_frida(root)
+    ensure_anti_anti_frida(root)   # patch 0003+0004+0005+0007: rename script + entrypoint
+    anti_anti_frida(root)          # patch 0010: robust embed hook that runs the script
     _assert_consistent(root)
     print("florida_carry: done")
 
@@ -212,6 +263,9 @@ def _assert_consistent(root: Path) -> None:
     eap = root / "subprojects" / "frida-core" / "src" / "embed-agent.py"
     if eap.exists() and "custom_script=str(output_dir)" in eap.read_text():
         sys.exit("florida_carry: FATAL — fragile anti-anti-frida path still in embed-agent.py")
+    aaf = root / "subprojects" / "frida-core" / "src" / "anti-anti-frida.py"
+    if not aaf.exists():
+        sys.exit("florida_carry: FATAL — anti-anti-frida.py missing; agent symbol rename can't run")
     print("florida_carry: consistency check OK")
 
 
