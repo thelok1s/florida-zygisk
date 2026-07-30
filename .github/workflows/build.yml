@@ -335,16 +335,18 @@ jobs:
           echo "Built: $(file "$SERVER")"
 
           main_sym=$(strings -a "$SERVER" | grep -c "frida_agent_main" || true)
+          rpc_blob=$(strings -a "$SERVER" | grep -c "Wm5KcFpHRTZjbkJq" || true)
           rpc=$(strings -a "$SERVER" | grep -c "frida:rpc" || true)
-          echo "frida_agent_main occurrences: $main_sym  (MUST be 0)"
-          echo "frida:rpc occurrences:        $rpc  (should be 0)"
+          echo "frida_agent_main occurrences: $main_sym   (MUST be 0 — agent symbol must be renamed)"
+          echo "rpc obfuscation blob (Wm5KcFpHRTZjbkJq): $rpc_blob   (>0 = Vala-side rpc obfuscation compiled in)"
+          echo "frida:rpc residual: $rpc   (expected >0 — agent JavaScript protocol string; not obfuscated by Florida)"
 
           if [ "$main_sym" -ne 0 ]; then
             echo "::error::Agent symbol rename (anti-anti-frida.py) did NOT run. This binary would fail with 'Failed to spawn: undefined symbol: main' (issue #1). Refusing to ship."
             exit 1
           fi
-          if [ "$rpc" -ne 0 ]; then
-            echo "::warning::rpc string obfuscation appears absent ('frida:rpc' literal still present). Anti-detection is weakened but the binary is functional."
+          if [ "$rpc_blob" -eq 0 ]; then
+            echo "::warning::rpc obfuscation blob missing — Vala-side 'frida:rpc' obfuscation did not compile in. Anti-detection weakened but binary is functional."
           fi
           echo "OK: Florida anti-detection patches verified effective in $SERVER"
 
