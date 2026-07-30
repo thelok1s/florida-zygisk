@@ -193,8 +193,8 @@ jobs:
         # was silently skipped and frida-server failed with
         # "Failed to spawn: undefined symbol: main" (issue #1).
         run: |
-          python3 -m pip install "lief==0.13.12"
-          python3 -c "import lief; assert hasattr(lief, 'parse'); print('lief', lief.__version__)"
+          python3 -m pip install "lief==0.13.2"
+          python3 -c "import lief; assert callable(lief.parse); print('lief', lief.__version__)"
 
       - name: Cache frida clone
         uses: actions/cache@v4
