@@ -147,7 +147,10 @@ jobs:
             libc6-dev libc6-dev-i386 \
             tree curl git
           sudo gem install fpm -v 1.11.0 --no-document 2>/dev/null || true
-          python3 -m pip install lief 2>/dev/null || true
+          # NOTE: lief is intentionally NOT installed here. It must go into the
+          # same Python interpreter frida's build actually uses (setup-python
+          # 3.10 below); installing it into the system Python here was the root
+          # cause of issue #1 ("Failed to spawn: undefined symbol: main").
 
       - name: Setup Android NDK
         id: setup-ndk
@@ -183,14 +186,28 @@ jobs:
         with:
           python-version: "3.10"
 
+      - name: Install lief for Florida's anti-anti-frida.py (REQUIRED)
+        # lief renames the frida_agent_main symbol -> "main" in the built agent.
+        # It MUST live in the same interpreter frida's build uses (this Python
+        # 3.10). Previously it was installed into the system Python, so the rename
+        # was silently skipped and frida-server failed with
+        # "Failed to spawn: undefined symbol: main" (issue #1).
+        run: |
+          python3 -m pip install "lief==0.13.12"
+          python3 -c "import lief; assert hasattr(lief, 'parse'); print('lief', lief.__version__)"
+
       - name: Cache frida clone
         uses: actions/cache@v4
         id: cache-frida
         with:
           # Cache the full frida source tree (submodules included) by frida version +
           # Florida patches SHA so a patches change always triggers a fresh clone.
+          # The `-v2` marker busts caches poisoned by earlier failed runs that used
+          # the old --reject/--skip patch logic (which left a partially-patched tree).
+          # Bump it whenever the patch/carry logic changes in a way that needs a
+          # clean re-clone.
           path: frida
-          key: frida-src-${{ needs.check_version.outputs.FRIDA_VERSION }}-${{ needs.check_version.outputs.FLORIDA_PATCHES_SHA }}
+          key: frida-src-v2-${{ needs.check_version.outputs.FRIDA_VERSION }}-${{ needs.check_version.outputs.FLORIDA_PATCHES_SHA }}
 
       - name: Clone frida at target version
         if: steps.cache-frida.outputs.cache-hit != 'true'
@@ -230,6 +247,7 @@ jobs:
 
           cd frida
           FRIDA_ROOT="$(pwd)"
+          shopt -s nullglob
           for patch_dir in "$PATCH_BASE"/*/; do
             subproject=$(basename "$patch_dir")
             target="subprojects/$subproject"
@@ -239,38 +257,54 @@ jobs:
               continue
             fi
 
-            patch_count=$(find "$patch_dir" -name "*.patch" | wc -l)
-            if [ "$patch_count" -eq 0 ]; then
+            patches=("$patch_dir"*.patch)
+            if [ "${#patches[@]}" -eq 0 ]; then
               echo "SKIP: no .patch files in $patch_dir"
               continue
             fi
 
-            echo "Applying $patch_count patch(es) to frida/$target …"
+            echo "==> $subproject: ${#patches[@]} patch(es)"
             cd "$FRIDA_ROOT/$target"
-            # Use git am so each patch becomes a proper commit; --ignore-whitespace
-            # and --reject help handle minor context differences across frida versions.
-            git am \
-              --ignore-whitespace \
-              "$patch_dir"*.patch \
-            || {
-              echo "git am failed for $subproject – attempting with --reject"
-              git am --abort 2>/dev/null || true
-              git am --ignore-whitespace --reject \
-                "$patch_dir"*.patch \
-              || {
-                echo "WARNING: some patches rejected for $subproject (see .rej files)"
-                # Continue anyway; partial patches are better than none
-                git am --skip 2>/dev/null || true
-              }
-            }
+            applied=0; skipped=0
+            for patch in "${patches[@]}"; do
+              pname="$(basename "$patch")"
+              # STRICT per-patch application: a patch applies WHOLLY or is skipped
+              # WHOLLY. We deliberately do NOT use --reject/--skip here — that used
+              # to apply hunks partially and ship inconsistent source trees, which
+              # is exactly what caused the getRpcStr-undefined CI break and the
+              # "undefined symbol: main" runtime error (issue #1). Bit-rotted
+              # patches that get skipped are repaired by scripts/florida_carry.py.
+              if git am --ignore-whitespace "$patch"; then
+                echo "    ✓ applied: $pname"
+                applied=$((applied + 1))
+              else
+                git am --abort 2>/dev/null || true
+                echo "    ✗ SKIPPED (bit-rotted): $pname — carry-fixes will repair"
+                skipped=$((skipped + 1))
+              fi
+            done
+            echo "    $subproject summary: $applied applied, $skipped skipped"
             cd "$FRIDA_ROOT"
           done
-          echo "All patches applied."
+          echo "Florida patch application complete (see per-patch log above)."
+
+      - name: Apply florida-zygisk carry-fixes
+        # Repair bit-rotted/skipped Florida patches with idempotent,
+        # content-anchored fixes. Each fix is a no-op once Florida fixes upstream.
+        # The script also fails fast (sys.exit) if a patch landed unrecoverably
+        # inconsistent — e.g. getRpcStr used-but-undefined, or a missing anchor.
+        run: |
+          cd frida
+          python3 "$GITHUB_WORKSPACE/scripts/florida_carry.py"
 
       - name: Build frida-server for ${{ matrix.arch }}
         env:
           ANDROID_NDK_ROOT: ${{ steps.setup-ndk.outputs.ndk-path }}
           ARCH: ${{ matrix.arch }}
+          # Absolute path to Florida's anti-anti-frida.py for the carry hook in
+          # embed-agent.py (renames frida_agent_main -> main). github.workspace
+          # is trusted (GitHub-controlled), so this is safe to inline.
+          FLORIDA_ANTI_ANTI_FRIDA: ${{ github.workspace }}/frida/subprojects/frida-core/src/anti-anti-frida.py
         run: |
           echo "Building frida for $ARCH …"
           echo "NDK: $ANDROID_NDK_ROOT"
@@ -283,6 +317,36 @@ jobs:
 
           # Build only frida-server to save time/disk
           make subprojects/frida-core/server/frida-server
+
+      - name: Verify Florida patches took effect in built binary
+        # The hard guard against issue #1: if anti-anti-frida.py never ran, the
+        # embedded agent still exports `frida_agent_main` while the server looks
+        # up `main` -> "Failed to spawn: undefined symbol: main". Fail loudly
+        # instead of shipping a broken binary. Also confirms rpc obfuscation.
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          SERVER="build-$ARCH/subprojects/frida-core/server/frida-server"
+          if [ ! -f "$SERVER" ]; then
+            echo "ERROR: frida-server not found at $SERVER"
+            find "build-$ARCH" -name "frida-server" 2>/dev/null || true
+            exit 1
+          fi
+          echo "Built: $(file "$SERVER")"
+
+          main_sym=$(strings -a "$SERVER" | grep -c "frida_agent_main" || true)
+          rpc=$(strings -a "$SERVER" | grep -c "frida:rpc" || true)
+          echo "frida_agent_main occurrences: $main_sym  (MUST be 0)"
+          echo "frida:rpc occurrences:        $rpc  (should be 0)"
+
+          if [ "$main_sym" -ne 0 ]; then
+            echo "::error::Agent symbol rename (anti-anti-frida.py) did NOT run. This binary would fail with 'Failed to spawn: undefined symbol: main' (issue #1). Refusing to ship."
+            exit 1
+          fi
+          if [ "$rpc" -ne 0 ]; then
+            echo "::warning::rpc string obfuscation appears absent ('frida:rpc' literal still present). Anti-detection is weakened but the binary is functional."
+          fi
+          echo "OK: Florida anti-detection patches verified effective in $SERVER"
 
       - name: Compress frida-server binary
         env:
